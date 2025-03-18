@@ -1,158 +1,155 @@
-import json
-import os
-import math
-from PIL import Image
-import numpy as np
+
 import torch
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
 from transformers import (
     AutoModelForVision2Seq,
-    AutoTokenizer,
     AutoImageProcessor,
-    TrainingArguments,
-    Trainer
+    AutoTokenizer,
+    default_data_collator
 )
-from datasets import Dataset
-import safetensors
+from datasets import load_dataset
+import json
+import os
+
 # 配置参数
-BASE_MODEL_PATH = "/home/vmp/distill/student"  # 原始模型路径
+BASE_IMAGE_DIR = 'dataset/images/'  # 图片存储目录
+MODEL_PATH = "/home/vmp/distill/student"  # 原始模型路径
 DATASET_PATH = "dataset/output.json"  # 数据集路径
-IMAGE_DIR = "dataset/images/"  # 图片存储目录
-OUTPUT_DIR = "res"  # 输出目录
+SAVE_PATH = 'res'  # 模型保存路径
+
+# 硬件配置
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 加载模型和处理器
 model = AutoModelForVision2Seq.from_pretrained(
-    BASE_MODEL_PATH,
-    torch_dtype=torch.bfloat16,
-    device_map="auto",
-    use_safetensors=True,
-    trust_remote_code=True  # 必须开启远程代码支持
+    MODEL_PATH,
+    trust_remote_code=True
+).to(device)
+image_processor = AutoImageProcessor.from_pretrained(
+    MODEL_PATH,
+    trust_remote_code=True,
+    # 处理grid_thw问题（假设模型需要特定网格参数）
+    size={"height": 256, "width": 256},  # 根据实际情况调整
+    do_center_crop=True
+)
+tokenizer = AutoTokenizer.from_pretrained(
+    MODEL_PATH,
+    trust_remote_code=True,
+    pad_token='<pad>'  # 确保设置填充token
 )
 
-tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_PATH)
-image_processor = AutoImageProcessor.from_pretrained(BASE_MODEL_PATH)
 
-# 加载并处理数据集
-with open(DATASET_PATH) as f:
-    raw_data = json.load(f)
+# 自定义数据集类
+class StampDataset(Dataset):
+    def __init__(self, data_path):
+        with open(data_path, 'r') as f:
+            self.data = json.load(f)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = self.data[idx]
+
+        # 处理图像
+        img_path = os.path.join(BASE_IMAGE_DIR, item['images'][0])
+        image = Image.open(img_path).convert('RGB')
+
+        # 使用图像处理器处理并确保tensor格式
+        pixel_values = image_processor(
+            image,
+            return_tensors="pt",
+            # 处理grid尺寸对齐问题
+            do_resize=True,
+            do_normalize=True
+        ).pixel_values.squeeze(0)  # 移除批次维度
+
+        # 处理文本
+        messages = item['messages']
+        question = messages[0]['content']
+        answer = messages[1]['content']
+
+        # 编码输入文本（处理<image>特殊标记）
+        inputs = tokenizer(
+            question,
+            return_tensors='pt',
+            padding='max_length',
+            truncation=True,
+            max_length=128
+        )
+
+        # 编码标签（处理填充对齐）
+        labels = tokenizer(
+            answer,
+            return_tensors='pt',
+            padding='max_length',
+            truncation=True,
+            max_length=32
+        ).input_ids
+
+        # 掩码处理（将填充部分设为-100）
+        labels[labels == tokenizer.pad_token_id] = -100
+
+        return {
+            'input_ids': inputs.input_ids.squeeze(0),
+            'attention_mask': inputs.attention_mask.squeeze(0),
+            'pixel_values': pixel_values,
+            'labels': labels.squeeze(0)
+        }
 
 
-def process_example(example):
-    img_path = os.path.join(IMAGE_DIR, example["images"][0])
-    image = Image.open(img_path).convert("RGB")
-
-    # 获取基础视觉特征
-    visual_inputs = image_processor(
-        image,
-        return_tensors="pt"
-    )
-
-    # 自动计算grid_thw（核心修改）
-    h, w = image.size
-    patch_size = model.config.vision_config.patch_size  # 通常是14
-    num_patches_h = h // patch_size
-    num_patches_w = w // patch_size
-    grid_thw = (1, num_patches_h, num_patches_w)  # 时间维度固定为1
-
-    # 处理对话格式
-    messages = example["messages"]
-    tokenized = tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        return_tensors="pt"
-    )
-
-    return {
-        "pixel_values": visual_inputs.pixel_values[0].numpy(),
-        "input_ids": tokenized[0].numpy(),
-        "labels": tokenized[0].clone().numpy(),
-        "image_h": h,  # 存储原始尺寸
-        "image_w": w
-    }
+# 初始化数据集和数据加载器
+dataset = StampDataset(DATASET_PATH)
 
 
-# 创建HuggingFace数据集
-dataset = Dataset.from_list(raw_data)
-
-
-# 自定义数据整理函数
 def collate_fn(batch):
-    # 转换所有字段为Tensor
-    def to_tensor(data):
-        if isinstance(data, np.ndarray):
-            return torch.tensor(data)
-        return data
-
-    # 处理所有字段
-    processed_batch = []
-    for x in batch:
-        processed_batch.append({
-            "pixel_values": to_tensor(x["pixel_values"]),
-            "input_ids": to_tensor(x["input_ids"]),
-            "labels": to_tensor(x["labels"]),
-            "image_h": x["image_h"],
-            "image_w": x["image_w"]
-        })
-
-    # 提取并处理pixel_values
-    pixel_values = torch.stack([x["pixel_values"] for x in processed_batch])
-
-    # 动态计算grid_thw
-    batch_h = [x["image_h"] for x in processed_batch]
-    batch_w = [x["image_w"] for x in processed_batch]
-    patch_size = model.config.vision_config.patch_size
-    grid_thw = [
-        (1, math.ceil(h / patch_size), math.ceil(w / patch_size))
-        for h, w in zip(batch_h, batch_w)
-    ]
-
-    # 处理文本序列（关键修改）
-    input_ids = torch.nn.utils.rnn.pad_sequence(
-        [x["input_ids"] for x in processed_batch],
-        batch_first=True,
-        padding_value=tokenizer.pad_token_id
-    )
-    labels = torch.nn.utils.rnn.pad_sequence(
-        [x["labels"] for x in processed_batch],
-        batch_first=True,
-        padding_value=-100
-    )
-
+    # 处理不同尺寸问题（确保图像尺寸统一）
     return {
-        "pixel_values": pixel_values,
-        "grid_thw": grid_thw,
-        "input_ids": input_ids,
-        "labels": labels
+        'input_ids': torch.stack([x['input_ids'] for x in batch]),
+        'attention_mask': torch.stack([x['attention_mask'] for x in batch]),
+        'pixel_values': torch.stack([x['pixel_values'] for x in batch]),
+        'labels': torch.stack([x['labels'] for x in batch])
     }
 
 
-# 配置训练参数
-training_args = TrainingArguments(
-    output_dir=OUTPUT_DIR,
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=4,
-    learning_rate=5e-5,
-    num_train_epochs=3,
-    logging_steps=10,
-    fp16=True,
-    save_strategy="epoch",
-    remove_unused_columns=False
+train_loader = DataLoader(
+    dataset,
+    batch_size=4,
+    shuffle=True,
+    collate_fn=collate_fn
 )
 
-# 创建Trainer
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=dataset,
-    data_collator=collate_fn,
-)
+# 训练配置
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+num_epochs = 3
 
-# 开始训练
-trainer.train()
+# 训练循环
+model.train()
+for epoch in range(num_epochs):
+    total_loss = 0
+    for batch in train_loader:
+        # 数据转移到设备
+        inputs = {k: v.to(device) for k, v in batch.items()}
 
-# 保存最终模型
+        # 前向传播
+        outputs = model(**inputs)
+        loss = outputs.loss
+
+        # 反向传播
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+        total_loss += loss.item()
+
+    print(f"Epoch {epoch + 1} | Avg Loss: {total_loss / len(train_loader):.4f}")
+
+# 保存蒸馏后的模型
 model.save_pretrained(
-    OUTPUT_DIR,
-    safe_serialization=True
+    SAVE_PATH,
+    safe_serialization=True,
+    variant='fp16'  # 可选，节省存储空间
 )
 
-print(f"Distilled model saved to {OUTPUT_DIR}")
+print(f"模型已成功保存至 {SAVE_PATH}")
