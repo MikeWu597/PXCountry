@@ -5,18 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="aa52ac23-dc1a-4e99-b934-dfdc2f6883ea" name="Changes" comment="commit">
-      <change afterPath="$PROJECT_DIR$/distill.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/sft.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/vit-base-patch16-224/.gitattributes" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/vit-base-patch16-224/README.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/vit-base-patch16-224/config.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/vit-base-patch16-224/flax_model.msgpack" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/vit-base-patch16-224/model.safetensors" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/vit-base-patch16-224/preprocessor_config.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/vit-base-patch16-224/pytorch_model.bin" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/vit-base-patch16-224/tf_model.h5" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/sft.py" beforeDir="false" afterPath="$PROJECT_DIR$/sft.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -105,7 +95,7 @@
       <updated>1742194422986</updated>
       <workItem from="1742194424017" duration="7479000" />
       <workItem from="1742213368889" duration="2488000" />
-      <workItem from="1742228340409" duration="7639000" />
+      <workItem from="1742228340409" duration="10377000" />
     </task>
     <task id="LOCAL-00001" summary="commit">
       <option name="closed" value="true" />
@@ -115,7 +105,15 @@
       <option name="project" value="LOCAL" />
       <updated>1742202775437</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="commit">
+      <option name="closed" value="true" />
+      <created>1742304399303</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1742304399303</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
