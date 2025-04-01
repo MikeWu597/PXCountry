@@ -30,8 +30,8 @@ image_processor = AutoImageProcessor.from_pretrained(
     MODEL_PATH,
     trust_remote_code=True,
     # 处理grid_thw问题（假设模型需要特定网格参数）
-    size={"height": 256, "width": 256},  # 根据实际情况调整
-    do_center_crop=True
+    size=(256,256),  # 根据实际情况调整
+    do_resize=True
 )
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_PATH,
@@ -55,6 +55,7 @@ class StampDataset(Dataset):
         # 处理图像
         img_path = os.path.join(BASE_IMAGE_DIR, item['images'][0])
         image = Image.open(img_path).convert('RGB')
+        image = image.resize((256,256))
 
         # 使用图像处理器处理并确保tensor格式
         pixel_values = image_processor(
@@ -62,6 +63,7 @@ class StampDataset(Dataset):
             return_tensors="pt",
             # 处理grid尺寸对齐问题
             do_resize=True,
+            size=(256,256),
             do_normalize=True
         ).pixel_values.squeeze(0)  # 移除批次维度
 
