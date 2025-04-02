@@ -1,93 +1,175 @@
-import cv2
 import os
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from PIL import Image, ImageTk
 
 
-def select_roi(img, window_name):
-    roi = [None, None, None, None]  # x, y, w, h
-    drawing = False
+class MosaicApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("图片马赛克工具")
 
-    def mouse_callback(event, x, y, flags, param):
-        nonlocal drawing, roi
-        if event == cv2.EVENT_LBUTTONDOWN:
-            drawing = True
-            roi[0], roi[1] = x, y
-        elif event == cv2.EVENT_MOUSEMOVE:
-            if drawing:
-                roi[2] = x - roi[0]
-                roi[3] = y - roi[1]
-        elif event == cv2.EVENT_LBUTTONUP:
-            drawing = False
-            roi[2] = x - roi[0]
-            roi[3] = y - roi[1]
+        # 图片列表和当前索引
+        self.image_list = []
+        self.current_index = 0
 
-    cv2.namedWindow(window_name)
-    cv2.setMouseCallback(window_name, mouse_callback)
+        # 当前图片和显示对象
+        self.current_image = None
+        self.photo = None
 
-    while True:
-        img_copy = img.copy()
-        if roi[0] is not None and roi[2] is not None:
-            cv2.rectangle(img_copy, (roi[0], roi[1]), (roi[0] + roi[2], roi[1] + roi[3]), (0, 255, 0), 2)
-        cv2.imshow(window_name, img_copy)
-        key = cv2.waitKey(1) & 0xFF
-        if key == 13:  # Enter键确认
-            break
-        elif key == 27:  # Esc键取消
-            roi = [None] * 4
-            break
+        # 画布和滚动条
+        self.canvas = tk.Canvas(root)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    cv2.destroyWindow(window_name)
-    if any(v is None or v <= 0 for v in roi[2:]):
-        return None
-    return tuple(roi)
+        # 添加滚动条
+        self.scrollbar_v = tk.Scrollbar(root, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.scrollbar_v.pack(side=tk.RIGHT, fill=tk.Y)
+        self.scrollbar_h = tk.Scrollbar(root, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        self.scrollbar_h.pack(side=tk.BOTTOM, fill=tk.X)
+        self.canvas.configure(yscrollcommand=self.scrollbar_v.set, xscrollcommand=self.scrollbar_h.set)
 
+        # 绑定鼠标事件
+        self.canvas.bind("<ButtonPress-1>", self.on_button_press)
+        self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_button_release)
 
-def apply_mosaic(img, roi):
-    x, y, w, h = roi
-    x, y = max(0, x), max(0, y)
-    w = min(img.shape[1] - x, w)
-    h = min(img.shape[0] - y, h)
-    if w <= 0 or h <= 0:
-        return img
-    region = img[y:y + h, x:x + w]
-    region = cv2.resize(cv2.resize(region, (10, 10)), (w, h), interpolation=cv2.INTER_NEAREST)
-    img[y:y + h, x:x + w] = region
-    return img
+        # 矩形区域列表和当前绘制的矩形
+        self.rectangles = []
+        self.current_rect = None
 
+        # 控制按钮
+        self.control_frame = tk.Frame(root)
+        self.control_frame.pack(side=tk.TOP, pady=10)
 
-def process_images(folder_path):
-    image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
-    images = [os.path.join(folder_path, f) for f in os.listdir(folder_path)
-              if os.path.splitext(f)[1].lower() in image_exts]
+        self.load_button = tk.Button(self.control_frame, text="选择文件夹", command=self.load_folder)
+        self.load_button.pack(side=tk.LEFT, padx=5)
 
-    for image_path in images:
-        img = cv2.imread(image_path)
-        if img is None:
-            print(f"无法读取: {image_path}")
-            continue
+        self.apply_button = tk.Button(self.control_frame, text="应用马赛克并下一张", command=self.apply_and_next)
+        self.apply_button.pack(side=tk.LEFT, padx=5)
 
-        # 裁剪阶段
-        print(f"处理: {image_path}")
-        print("选择裁剪区域后按Enter...")
-        crop_roi = select_roi(img, "裁剪选择")
-        if not crop_roi:
-            print("跳过裁剪")
-            continue
-        x, y, w, h = crop_roi
-        cropped_img = img[y:y + h, x:x + w]
+        self.clear_button = tk.Button(self.control_frame, text="清除所有区域", command=self.clear_rectangles)
+        self.clear_button.pack(side=tk.LEFT, padx=5)
 
-        # 马赛克阶段
-        print("选择马赛克区域后按Enter...")
-        mosaic_roi = select_roi(cropped_img, "马赛克选择")
-        if not mosaic_roi:
-            print("跳过马赛克")
-            continue
+        # 状态栏
+        self.status_label = tk.Label(root, text="未选择文件夹", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # 应用马赛克并保存
-        final_img = apply_mosaic(cropped_img, mosaic_roi)
-        cv2.imwrite(image_path, final_img)
-        print(f"已保存: {image_path}")
+    def load_folder(self):
+        folder = filedialog.askdirectory()
+        if not folder:
+            return
+
+        # 获取所有图片文件
+        self.image_list = [
+            os.path.join(folder, f) for f in os.listdir(folder)
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))
+        ]
+
+        if not self.image_list:
+            messagebox.showerror("错误", "文件夹中没有图片文件")
+            return
+
+        self.current_index = 0
+        self.load_image()
+
+    def load_image(self):
+        if self.current_index >= len(self.image_list):
+            messagebox.showinfo("完成", "所有图片处理完成")
+            self.root.quit()
+            return
+
+        image_path = self.image_list[self.current_index]
+        self.current_image = Image.open(image_path)
+
+        # 调整画布滚动区域
+        self.canvas.config(scrollregion=(0, 0, self.current_image.width, self.current_image.height))
+
+        # 显示图片
+        self.photo = ImageTk.PhotoImage(self.current_image)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
+
+        # 重置矩形列表
+        self.rectangles = []
+        self.status_label.config(text=f"处理中: {self.current_index + 1}/{len(self.image_list)}")
+
+    def on_button_press(self, event):
+        self.start_x = self.canvas.canvasx(event.x)
+        self.start_y = self.canvas.canvasy(event.y)
+
+        if self.current_rect:
+            self.canvas.delete(self.current_rect)
+
+        self.current_rect = self.canvas.create_rectangle(
+            self.start_x, self.start_y, self.start_x, self.start_y,
+            outline='red', width=2
+        )
+
+    def on_mouse_drag(self, event):
+        cur_x = self.canvas.canvasx(event.x)
+        cur_y = self.canvas.canvasy(event.y)
+        self.canvas.coords(self.current_rect, self.start_x, self.start_y, cur_x, cur_y)
+
+    def on_button_release(self, event):
+        end_x = self.canvas.canvasx(event.x)
+        end_y = self.canvas.canvasy(event.y)
+
+        # 调整坐标顺序
+        x1 = min(self.start_x, end_x)
+        y1 = min(self.start_y, end_y)
+        x2 = max(self.start_x, end_x)
+        y2 = max(self.start_y, end_y)
+
+        # 限制在图片范围内
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(self.current_image.width, x2)
+        y2 = min(self.current_image.height, y2)
+
+        self.rectangles.append((x1, y1, x2, y2))
+        self.canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
+        self.current_rect = None
+
+    def apply_and_next(self):
+        if not self.rectangles:
+            messagebox.showwarning("警告", "请至少选择一个区域")
+            return
+
+        # 应用马赛克
+        image = self.current_image.copy()
+        block_size = 10  # 马赛克块大小
+
+        for rect in self.rectangles:
+            x1, y1, x2, y2 = map(int, rect)
+            region = image.crop((x1, y1, x2, y2))
+
+            # 计算缩放比例
+            w, h = region.size
+            if w == 0 or h == 0:
+                continue
+            small = region.resize((block_size, block_size), Image.NEAREST)
+            mosaic = small.resize((w, h), Image.NEAREST)
+
+            image.paste(mosaic, (x1, y1, x2, y2))
+
+        # 保存图片（覆盖原文件）
+        try:
+            image.save(self.image_list[self.current_index], quality=90)
+        except Exception as e:
+            messagebox.showerror("错误", f"保存失败: {str(e)}")
+            return
+
+        # 加载下一张图片
+        self.current_index += 1
+        self.load_image()
+
+    def clear_rectangles(self):
+        self.rectangles = []
+        self.canvas.delete("all")
+        self.photo = ImageTk.PhotoImage(self.current_image)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
 
 
 if __name__ == "__main__":
-    folder = input("请输入图片文件夹路径: ").strip()
-    process_images(folder)
+    root = tk.Tk()
+    app = MosaicApp(root)
+    root.mainloop()
